@@ -120,7 +120,7 @@ STARTUP_GUILD_ID = "1297294853448663050"
 STARTUP_CHANNEL_ID = "1297294853935206512"
 
 # All available tags
-TAGS = ["beast", "feed", "dead", "tame", "edge", "hev", "city"]
+TAGS = ["feed", "tame", "edge", "hev", "city"]
 
 # Termux detection
 IS_TERMUX = os.path.exists('/data/data/com.termux')
@@ -224,24 +224,43 @@ def release_wakelock():
     return False
 
 def is_war_day_active():
-    """Check if current time is during Clash Royale Battle Days (Thu-Sun)"""
+    """Check if current time is during Clash Royale Battle Days (Thu-Mon at 15:30 IST transitions)"""
     now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc + timedelta(hours=5, minutes=30)  # Convert to IST
     current_weekday = now_utc.weekday()
     current_hour = now_utc.hour
     
-    # Battle Days: Thursday 10:00 UTC to Monday 10:00 UTC
+    # Battle Days: Thursday 15:30 IST to Monday 15:30 IST
+    # Each battle day transitions at 15:30 IST (10:00 UTC)
+    # Thursday = 3, Friday = 4, Saturday = 5, Sunday = 6, Monday = 0
+    
+    # Battle Day 1: Thu 15:30 IST → Fri 15:30 IST
     if current_weekday == 3 and current_hour >= 10:
         return True, "Battle Day 1: Thursday"
-    elif current_weekday == 4:
+    elif current_weekday == 4 and current_hour < 10:
+        return True, "Battle Day 1: ends @ 15:30 IST"
+    
+    # Battle Day 2: Fri 15:30 IST → Sat 15:30 IST
+    elif current_weekday == 4 and current_hour >= 10:
         return True, "Battle Day 2: Friday"
-    elif current_weekday == 5:
+    elif current_weekday == 5 and current_hour < 10:
+        return True, "Battle Day 2: ends @ 15:30 IST"
+    
+    # Battle Day 3: Sat 15:30 IST → Sun 15:30 IST
+    elif current_weekday == 5 and current_hour >= 10:
         return True, "Battle Day 3: Saturday"
-    elif current_weekday == 6:
+    elif current_weekday == 6 and current_hour < 10:
+        return True, "Battle Day 3: ends @ 15:30 IST"
+    
+    # Battle Day 4: Sun 15:30 IST → Mon 15:30 IST
+    elif current_weekday == 6 and current_hour >= 10:
         return True, "Battle Day 4: Sunday"
     elif current_weekday == 0 and current_hour < 10:
-        return True, "Battle Day 4: Sunday ending"
+        return True, "Battle Day 4: ends @ 15:30 IST"
+    
+    # Training Days: Mon 15:30 IST → Thu 15:30 IST
     else:
-        return False, f"Training Day ({now_utc.strftime('%A %H:%M')} UTC)"
+        return False, f"Training Day ({now_ist.strftime('%A %H:%M')} IST)"
 
 def get_current_interval_hours():
     """Get current nudge interval based on battle day phase"""
@@ -463,7 +482,7 @@ def run_scheduler():
     log("=" * 55, "INIT")
     log("📱 Termux Mode: " + ("ACTIVE" if IS_TERMUX else "Desktop"), "INIT")
     log("🔋 Battery Mode: Event-based (near-zero drain)", "INIT")
-    log("📅 Battle Days: Thu 10:00 UTC → Mon 10:00 UTC", "INIT")
+    log("📅 Battle Days: Thu 15:30 IST → Mon 15:30 IST", "INIT")
     log("⏰ Schedule: 3h (early) → 2h (mid) → 1h (final)", "INIT")
     log("=" * 55, "INIT")
     
