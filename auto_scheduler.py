@@ -319,25 +319,74 @@ def get_next_phase_change():
     seconds_until_phase = (next_boundary - hours_in_cycle) * 3600
     return max(seconds_until_phase, 60)
 
+# Global variable to track last executed interval
+_last_executed_interval = None
+
+def get_current_interval_id():
+    """
+    Get a unique identifier for the current interval.
+    Returns (interval_number, interval_hours) where interval_number changes each time we enter a new interval.
+    """
+    now_utc = datetime.now(timezone.utc)
+    
+    # Calculate day start (10:00 UTC)
+    if now_utc.hour >= 10:
+        day_start = now_utc.replace(hour=10, minute=0, second=0, microsecond=0)
+    else:
+        day_start = (now_utc - timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    
+    hours_since_day_start = (now_utc - day_start).total_seconds() / 3600
+    hours_in_cycle = hours_since_day_start % 24
+    
+    # Determine current phase and interval
+    if hours_in_cycle < 12:  # Early phase: every 3 hours
+        interval_hours = 3
+        interval_num = int(hours_in_cycle // 3)
+    elif hours_in_cycle < 18:  # Mid phase: every 2 hours
+        interval_hours = 2
+        interval_num = 4 + int((hours_in_cycle - 12) // 2)  # 4-6
+    else:  # Final phase: every 1 hour
+        interval_hours = 1
+        interval_num = 7 + int((hours_in_cycle - 18) // 1)  # 7-12
+    
+    # Create unique interval ID (includes day to avoid cross-day confusion)
+    day_id = day_start.strftime('%Y%m%d')
+    interval_id = f"{day_id}_{interval_num}"
+    
+    return interval_id, interval_hours
+
 def calculate_sleep_duration():
     """
     Calculate optimal sleep duration for battery efficiency.
     Returns (sleep_seconds, reason, should_execute_now)
+    
+    NEW LOGIC: Track which interval we've executed in. If we're in a new interval
+    that we haven't executed yet, execute now. This is much more reliable than
+    trying to hit a tiny 2-minute window.
     """
+    global _last_executed_interval
+    
     active, status = is_war_day_active()
     
     if not active:
         # Sleep until next Battle Day - maximum battery savings
+        _last_executed_interval = None  # Reset on training days
         sleep_secs = get_next_battle_day_start()
         return sleep_secs, f"Training day - sleeping until next Battle Day", False
     
-    # During Battle Days, calculate time until next action
-    interval_hours, phase = get_current_interval_hours()
+    # During Battle Days, check if we need to execute
+    current_interval, interval_hours = get_current_interval_id()
     interval_seconds = interval_hours * 3600
+    phase = f"{'early' if interval_hours == 3 else 'mid' if interval_hours == 2 else 'final'} phase (every {interval_hours}h)"
     
+    # Check if we've already executed in this interval
+    if _last_executed_interval != current_interval:
+        # NEW INTERVAL - we should execute now!
+        return 0, f"{phase} - Execute now (interval: {current_interval})", True
+    
+    # Already executed in this interval, calculate time until next interval
     now_utc = datetime.now(timezone.utc)
     
-    # Calculate time since last interval boundary
     if now_utc.hour >= 10:
         day_start = now_utc.replace(hour=10, minute=0, second=0, microsecond=0)
     else:
@@ -345,12 +394,6 @@ def calculate_sleep_duration():
     
     seconds_since_day_start = (now_utc - day_start).total_seconds()
     seconds_into_interval = seconds_since_day_start % interval_seconds
-    
-    # If we're at the start of an interval (within 2 minutes), execute now
-    if seconds_into_interval < 120:
-        return 0, f"{phase} - Execute now", True
-    
-    # Otherwise, sleep until next interval
     seconds_until_next = interval_seconds - seconds_into_interval
     
     # Also check if phase will change before next interval
@@ -361,6 +404,13 @@ def calculate_sleep_duration():
         return phase_change_seconds, f"Phase change in {phase_change_seconds/3600:.1f}h", False
     
     return seconds_until_next, f"{phase} - Next action in {seconds_until_next/60:.0f}min", False
+
+def mark_interval_executed():
+    """Mark the current interval as executed"""
+    global _last_executed_interval
+    current_interval, _ = get_current_interval_id()
+    _last_executed_interval = current_interval
+    log(f"✅ Marked interval {current_interval} as executed", "SCHED")
 
 async def send_startup_message():
     """Send startup notification"""
@@ -496,8 +546,6 @@ def run_scheduler():
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        last_execution_time = None  # Track when we last executed
-        
         while True:
             # Calculate optimal sleep duration
             sleep_seconds, reason, execute_now = calculate_sleep_duration()
@@ -507,30 +555,16 @@ def run_scheduler():
             log(f"📋 {reason}", "STATUS")
             
             if execute_now:
-                # Check if we already executed in this interval window
-                now = datetime.now(timezone.utc)
-                if last_execution_time:
-                    time_since_last = (now - last_execution_time).total_seconds()
-                    # If we executed less than 30 minutes ago, skip (prevent double execution)
-                    if time_since_last < 1800:  # 30 minutes minimum between executions
-                        log(f"⏭️ Skipping - already executed {time_since_last/60:.0f}min ago", "STATUS")
-                        # Sleep until next interval
-                        interval_hours, _ = get_current_interval_hours()
-                        sleep_seconds = (interval_hours * 3600) - time_since_last
-                        if sleep_seconds > 0:
-                            battery_efficient_sleep(sleep_seconds)
-                        continue
-                
-                # Time to execute - acquire wake-lock and run
+                # Time to execute - run nudge sequence
                 asyncio.run(execute_nudge_sequence())
-                last_execution_time = datetime.now(timezone.utc)  # Record execution time
                 
-                # After execution, recalculate and sleep
+                # Mark this interval as executed (prevents re-execution)
+                mark_interval_executed()
+                
+                # Recalculate sleep duration (will now show time until next interval)
                 sleep_seconds, reason, _ = calculate_sleep_duration()
-                # Ensure we sleep at least until next interval
-                interval_hours, _ = get_current_interval_hours()
-                min_sleep = (interval_hours * 3600) - 120  # Sleep almost full interval
-                sleep_seconds = max(sleep_seconds, min_sleep)
+                log(f"📋 {reason}", "STATUS")
+                
                 if sleep_seconds > 0:
                     battery_efficient_sleep(sleep_seconds)
             else:
