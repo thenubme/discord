@@ -496,6 +496,8 @@ def run_scheduler():
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
+        last_execution_time = None  # Track when we last executed
+        
         while True:
             # Calculate optimal sleep duration
             sleep_seconds, reason, execute_now = calculate_sleep_duration()
@@ -505,11 +507,30 @@ def run_scheduler():
             log(f"📋 {reason}", "STATUS")
             
             if execute_now:
+                # Check if we already executed in this interval window
+                now = datetime.now(timezone.utc)
+                if last_execution_time:
+                    time_since_last = (now - last_execution_time).total_seconds()
+                    # If we executed less than 30 minutes ago, skip (prevent double execution)
+                    if time_since_last < 1800:  # 30 minutes minimum between executions
+                        log(f"⏭️ Skipping - already executed {time_since_last/60:.0f}min ago", "STATUS")
+                        # Sleep until next interval
+                        interval_hours, _ = get_current_interval_hours()
+                        sleep_seconds = (interval_hours * 3600) - time_since_last
+                        if sleep_seconds > 0:
+                            battery_efficient_sleep(sleep_seconds)
+                        continue
+                
                 # Time to execute - acquire wake-lock and run
                 asyncio.run(execute_nudge_sequence())
+                last_execution_time = datetime.now(timezone.utc)  # Record execution time
                 
                 # After execution, recalculate and sleep
                 sleep_seconds, reason, _ = calculate_sleep_duration()
+                # Ensure we sleep at least until next interval
+                interval_hours, _ = get_current_interval_hours()
+                min_sleep = (interval_hours * 3600) - 120  # Sleep almost full interval
+                sleep_seconds = max(sleep_seconds, min_sleep)
                 if sleep_seconds > 0:
                     battery_efficient_sleep(sleep_seconds)
             else:
