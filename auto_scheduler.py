@@ -120,7 +120,7 @@ STARTUP_GUILD_ID = "1297294853448663050"
 STARTUP_CHANNEL_ID = "1297294853935206512"
 
 # All available tags
-TAGS = ["feed", "tame", "edge", "hev", "city"]
+TAGS = ["feed", "tame", "edge", "hev", "city" , "dead"]
 
 # Termux detection
 IS_TERMUX = os.path.exists('/data/data/com.termux')
